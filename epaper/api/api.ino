@@ -13,7 +13,7 @@ const char* ssid = SECRET_SSID;     // secrets.h で定義した変数
 const char* password = SECRET_PASS; // secrets.h で定義した変数
 
 // アクセスする「JSONを返すAPI」のURL（Nginx経由でFastAPIの /api/imageName エンドポイントを指す）
-const char* calender_url = "http://10.200.0.229:8080/api/dashboard";
+const char* calender_url = "http://10.200.0.187:8080/api/dashboard";
 
 // 時計用グローバル変数
 const int TIME_X = 840; // 時計を描画するX座標 (例: 右寄せ)
@@ -25,6 +25,8 @@ int lastMinute = -1; // 前回表示した「分」（初期値はありえな�
 struct tm timeinfo; // 時刻情報を格納する構造体
 
 int cnt = 0; //　画像更新時間間隔用
+
+String lastETag = "";
 
 void setup() {
   // --- M5Paper S3本体の初期化 ---
@@ -78,41 +80,99 @@ void setup() {
   M5.Display.setEpdMode(epd_mode_t::epd_fast); 
 }
 
-// // 指定されたURLが画像(image/...)かどうかを確認する関数
-// bool isUrlImage(const char* url) {
-//   if (WiFi.status() != WL_CONNECTED) return false;
+// サーバーを確認し、更新があれば描画まで行う関数
+void checkAndUpdateCalendar() {
+  // WiFiがつながっていなければ何もしない
+  if (WiFi.status() != WL_CONNECTED) return;
 
-//   HTTPClient http;
-//   Serial.print("[Check] Checking Content-Type: ");
-//   Serial.println(url);
+  Serial.println("[Check] Checking for updates...");
 
-//   http.begin(url);
+  HTTPClient http;
   
-//   // ヘッダー情報のうち "Content-Type" を取得するように設定
-//   const char * headerKeys[] = {"Content-Type"};
-//   http.collectHeaders(headerKeys, 1);
+  // ここに対象のURL変数を指定
+  http.begin(calender_url); 
 
-//   // HEADリクエストを送信 (データ本体は取得せず、ヘッダーだけ取得)
-//   // ※サーバーによってはHEADを禁止している場合があります。その場合は "GET" に変えてください。
-//   int httpCode = http.sendRequest("HEAD"); 
+  // --- 1. ETagの照合リクエスト設定 ---
+  // もし前回のETagを持っていれば、サーバーに「これと同じですか？」と聞く
+  // これにより、変更がない場合はデータ受信をスキップできます
+  if (lastETag.length() > 0) {
+    http.addHeader("If-None-Match", lastETag);
+    Serial.println("[Check] Sending If-None-Match: " + lastETag);
+  }
 
-//   bool isImage = false;
+  // --- 2. レスポンスヘッダーの取得設定 ---
+  // "Content-Type" (画像かどうか) と "ETag" (指紋) を取得できるようにする
+  const char* headerKeys[] = {"Content-Type", "ETag"};
+  http.collectHeaders(headerKeys, 2);
 
-//   if (httpCode == HTTP_CODE_OK) {
-//     String contentType = http.header("Content-Type");
-//     Serial.println("[Check] Type: " + contentType);
+  // --- 3. リクエスト送信 ---
+  int httpCode = http.GET();
 
-//     // "image" という文字が含まれているか確認 (例: "image/jpeg", "image/png")
-//     if (contentType.indexOf("image") >= 0) {
-//       isImage = true;
-//     }
-//   } else {
-//     Serial.printf("[Check] Failed or not 200 OK. Code: %d\n", httpCode);
-//   }
+  // --- 4. 結果による分岐 ---
+  if (httpCode == HTTP_CODE_OK) { // 200 OK: 更新あり (または初回)
+    Serial.println("[Update] 200 OK - New content received.");
 
-//   http.end();
-//   return isImage;
-// }
+    // 新しいETagが来ていれば保存する
+    if (http.hasHeader("ETag")) {
+      lastETag = http.header("ETag");
+      Serial.println("[Update] Saved new ETag: " + lastETag);
+    }
+
+    // 画像データかどうかのチェック
+    String contentType = http.header("Content-Type");
+    Serial.println("[Update] Content-Type: " + contentType);
+
+    if (contentType.indexOf("image") >= 0) {
+      Serial.println("[Update] Drawing image...");
+      
+      // 画像データを取得
+      String payload = http.getString();
+      
+      if (payload.length() > 0) {
+        // 画像を描画するために「高画質モード」へ
+        M5.Display.setEpdMode(epd_mode_t::epd_quality);
+
+        bool drawn = false;
+        
+        // JPEGかPNGかで描画関数を使い分ける
+        if (contentType.indexOf("png") >= 0) {
+           drawn = M5.Display.drawPng((const uint8_t*)payload.c_str(), payload.length(), 0, 0);
+        } else {
+           drawn = M5.Display.drawJpg((const uint8_t*)payload.c_str(), payload.length(), 0, 0);
+        }
+
+        if (drawn) {
+          // ★ここで初めて画面が暗転して更新される
+          M5.Display.display(); 
+          Serial.println("[Update] Success!");
+        } else {
+          Serial.println("[Update] Draw failed.");
+        }
+
+        // 時計表示のために「高速モード」に戻す
+        M5.Display.setEpdMode(epd_mode_t::epd_fast);
+        
+        // 画像更新で時計が消えたので、すぐに再描画するようフラグをリセット
+        lastMinute = -1; 
+      }
+    } else {
+        Serial.println("[Update] Received non-image data. Ignoring.");
+    }
+
+  } else if (httpCode == 304) { // 304 Not Modified: 更新なし
+    // サーバーが「データは変わってないよ」と返してきた場合
+    Serial.println("[Check] 304 Not Modified. No update needed.");
+    
+    // 何もしない = 画像ダウンロードもしないし、M5.Display.display() も呼ばない
+    // つまり、画面はチラつかず、そのままの状態が維持されます。
+
+  } else {
+    // その他のエラー
+    Serial.printf("[Check] HTTP Failed: %d\n", httpCode);
+  }
+
+  http.end();
+}
 
 void loop() {
   timeChange();
@@ -183,20 +243,9 @@ void timeChange() {
       // 画像更新用変数
       cnt++;
 
-      if (cnt >= 1) {
+      if (cnt >= 5) {
         // 画像更新関数を呼び出す
-        connectionHTTP();
-
-        // // URLの中身が画像であるかチェックし、画像の場合のみ更新する
-        // if (isUrlImage(calender_url)) {
-        //     Serial.println("[Update] It's an image. Updating...");
-            
-        //     // 既存の画像更新関数
-        //     connectionHTTP();
-        // } else {
-        //     Serial.println("[Update] Not an image. Skip update.");
-        // }
-
+        checkAndUpdateCalendar();
         cnt = 0; // リセット
       }
 
