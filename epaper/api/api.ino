@@ -13,7 +13,7 @@ const char* ssid = SECRET_SSID;     // secrets.h で定義した変数
 const char* password = SECRET_PASS; // secrets.h で定義した変数
 
 // アクセスする「JSONを返すAPI」のURL（Nginx経由でFastAPIの /api/imageName エンドポイントを指す）
-const char* calender_url = "http://10.200.2.39:8080/api/dashboard";
+const char* calender_url = "http://10.200.0.187:8080/api/dashboard";
 
 // 時計用グローバル変数
 const int TIME_X = 840; // 時計を描画するX座標 (例: 右寄せ)
@@ -64,7 +64,7 @@ void setup() {
     delay(500); // 0.5秒待つ
   }     
 
-  connectionHTTP(); // JSON APIへのリクエスト
+  checkAndUpdateCalendar();
   
   // 描画した画像を、ここで「同時に」EPDに反映
   M5.Display.display(); 
@@ -92,24 +92,23 @@ void checkAndUpdateCalendar() {
   // ここに対象のURL変数を指定
   http.begin(calender_url); 
 
-  // --- 1. ETagの照合リクエスト設定 ---
+  // --- ETagの照合リクエスト設定 ---
   // もし前回のETagを持っていれば、サーバーに「これと同じですか？」と聞く
-  // これにより、変更がない場合はデータ受信をスキップできます
   if (lastETag.length() > 0) {
     http.addHeader("If-None-Match", lastETag);
     Serial.println("[Check] Sending If-None-Match: " + lastETag);
   }
 
-  // --- 2. レスポンスヘッダーの取得設定 ---
+  // --- レスポンスヘッダーの取得設定 ---
   // "Content-Type" (画像かどうか) と "ETag" (指紋) を取得できるようにする
   const char* headerKeys[] = {"Content-Type", "ETag"};
   http.collectHeaders(headerKeys, 2);
 
-  // --- 3. リクエスト送信 ---
+  // --- リクエスト送信 ---
   int httpCode = http.GET();
 
-  // --- 4. 結果による分岐 ---
-  if (httpCode == HTTP_CODE_OK) { // 200 OK: 更新あり (または初回)
+  // --- 結果による分岐 ---
+  if (httpCode == HTTP_CODE_OK) { // 200 OK: 更新あり
     Serial.println("[Update] 200 OK - New content received.");
 
     // 新しいETagが来ていれば保存する
@@ -142,7 +141,7 @@ void checkAndUpdateCalendar() {
         }
 
         if (drawn) {
-          // ★ここで初めて画面が暗転して更新される
+          // ここで画面更新される
           M5.Display.display(); 
           Serial.println("[Update] Success!");
         } else {
@@ -162,9 +161,7 @@ void checkAndUpdateCalendar() {
   } else if (httpCode == 304) { // 304 Not Modified: 更新なし
     // サーバーが「データは変わってないよ」と返してきた場合
     Serial.println("[Check] 304 Not Modified. No update needed.");
-    
-    // 何もしない = 画像ダウンロードもしないし、M5.Display.display() も呼ばない
-    // つまり、画面はチラつかず、そのままの状態が維持されます。
+    // 更新がないので、何もしない
 
   } else {
     // その他のエラー
@@ -177,62 +174,6 @@ void checkAndUpdateCalendar() {
 void loop() {
   timeChange();
   delay(10); // ループがビジーになるのを防ぐ
-}
-
-void connectionHTTP() {
-  // HTTPリクエストを実行するための「HTTPClient」オブジェクト（道具）を準備
-  HTTPClient http;
-  
-  // HTTP道具に、目標のURL(calender_url)をセット
-  http.begin(calender_url); 
-  
-  // 10秒待っても応答がなければタイムアウトとして接続を切る設定
-  http.setTimeout(10000); 
-
-  // HTTP GETリクエストを送信（結果として、HTTPステータスコードが httpCode に返ってくる）
-  int httpCode = http.GET();
-
-  // --- JSON APIの応答を解析 ---
-  // httpCode が HTTP_CODE_OK (== 200、つまり「成功」) だった場合
-  if (httpCode == HTTP_CODE_OK) {
-    // サーバーから返ってきたデータ(画像バイト)を全て String バッファに読み込む
-    String payload = http.getString();
-
-    if (payload.length() > 0) {
-      Serial.printf("Data received: %d bytes. Drawing...\n", payload.length());
-
-      // 画質モードをここで変更 (綺麗に表示するため)
-      M5.Display.setEpdMode(epd_mode_t::epd_quality);
-      
-      // 読み込んだデータを drawJpg に渡す
-      // python側が JPEG なら drawJpg、PNG なら drawPng を使う
-      bool success = M5.Display.drawPng(
-        (const uint8_t*)payload.c_str(), // データの先頭ポインタ
-        payload.length(),                // データのサイズ
-        0,                               // X座標
-        0                                // Y座標
-      );
-
-      if (!success) {
-        Serial.println("Draw failed! (Format error?)");
-        M5.Display.drawString("Draw Failed", 10, 50);
-      }
-
-      // 画面に反映 (暗転リフレッシュ)
-      M5.Display.display();
-
-    } else {
-      Serial.println("Payload is empty.");
-    }
-  } else {
-    Serial.printf("HTTP Failed. Code: %d\n", httpCode);
-    M5.Display.drawString("HTTP Error", 10, 50);
-    M5.Display.display();
-  }
-
-  http.end();
-
-  M5.Display.setEpdMode(epd_mode_t::epd_fast); 
 }
 
 void timeChange() {
