@@ -13,7 +13,7 @@ const char* ssid = SECRET_SSID;     // secrets.h で定義した変数
 const char* password = SECRET_PASS; // secrets.h で定義した変数
 
 // アクセスする「JSONを返すAPI」のURL（Nginx経由でFastAPIの /api/imageName エンドポイントを指す）
-const char* calender_url = "http://10.200.0.187:8080/api/dashboard";
+const char* calender_url = "http://10.200.2.39:8080/api/dashboard";
 
 // 時計用グローバル変数
 const int TIME_X = 840; // 時計を描画するX座標 (例: 右寄せ)
