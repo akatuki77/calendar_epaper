@@ -13,8 +13,8 @@ const char* ssid = SECRET_SSID;     // secrets.h で定義した変数
 const char* password = SECRET_PASS; // secrets.h で定義した変数
 
 // アクセスする「JSONを返すAPI」のURL（Nginx経由でFastAPIの /api/imageName エンドポイントを指す）
-const char* calender_url = "http://10.200.0.187:8080/api/dashboard";
-const char* week_url = "http://10.200.0.187:8080/api/weekData";
+const char* calender_url = "http://10.200.1.58:8080/api/dashboard";
+const char* week_url = "http://10.200.1.58:8080/api/weekData";
 
 // 最初に表示される画像URL
 const char* current_url = calender_url;
@@ -83,7 +83,6 @@ void checkAndUpdateCalendar() {
       if (payload.length() > 0) {
         // 画像を描画するために「高画質モード」へ
         M5.Display.setEpdMode(epd_mode_t::epd_quality);
-
         bool drawn = false;
         
         // JPEGかPNGかで描画関数を使い分ける
@@ -94,9 +93,12 @@ void checkAndUpdateCalendar() {
         }
 
         if (drawn) {
-          // ここで初めて画面が暗転して更新される
-          M5.Display.display(); 
-          Serial.println("[Update] Success!");
+          // ボタンを描画
+          drawModeButton();
+
+          M5.Display.display(); // 画面更新(暗転)
+        } else {
+          Serial.println("[Update] Draw failed.");
         }
 
         // 時計表示のために「高速モード」に戻す
@@ -122,6 +124,26 @@ void checkAndUpdateCalendar() {
   http.end();
 }
 
+// ボタン描画関数
+void drawModeButton() {
+  // 枠線を描く
+  M5.Display.drawRect(0, 0, 80, 80, TFT_BLACK);
+
+  // フォント設定 (日本語フォント efontJA_24 を使用)
+  M5.Display.setFont(&fonts::efontJA_24);
+  M5.Display.setTextSize(1); // フォント自体が大きいので倍率は1でOK
+  M5.Display.setTextColor(TFT_BLACK, TFT_WHITE); // 黒文字、背景白
+
+  // モードによって文字を変える
+  if (weekMode) {
+    // 週表示のとき
+    M5.Display.drawString("月へ", 15, 30); // 座標は枠の中央あたりに調整
+  } else {
+    // 月表示のとき (ダッシュボード)
+    M5.Display.drawString("週へ", 15, 30);
+  }
+}
+
 void setup() {
   // --- M5Paper S3本体の初期化 ---
   // M5Paper S3用の設定をロード
@@ -141,14 +163,7 @@ void setup() {
   // EPD(電子ペーパー)の描画モードを「高速(epd_fast)」に設定
   M5.Display.setEpdMode(epd_mode_t::epd_quality); 
   
-  // 画面全体を白(TFT_WHITE)で塗りつぶす（クリアする）
-  M5.Display.fillScreen(TFT_WHITE);
-  
-  // これ以降に描画する文字のサイズを 2 (標準の2倍) に設定
-  M5.Display.setTextSize(2);        
-  
-  // これ以降に描画する文字の色を 黒(TFT_BLACK) に設定
-  M5.Display.setTextColor(TFT_BLACK);
+  drawModeButton();
   
   // WiFiに接続を開始
   WiFi.begin(ssid, password);
@@ -177,11 +192,6 @@ void setup() {
 
 // タッチ判定関数
 void handleTouch() {
-  // 左上にボタンがあることが分かるように枠線を描いておく
-  M5.Display.drawRect(0, 0, 80, 80, TFT_BLACK);
-  M5.Display.drawString("TAP", 10, 40);
-  M5.Display.display();
-  
   // タッチされているか？
   if (M5.Touch.getCount() > 0) {
     auto detail = M5.Touch.getDetail(0);
@@ -190,7 +200,7 @@ void handleTouch() {
     if (detail.wasClicked()) {
       Serial.printf("Touched at X:%d, Y:%d\n", detail.x, detail.y);
 
-      // 左上 (0,0) から 幅20, 高さ20 の範囲内か？
+      // 左上 (0,0) から 幅80, 高さ80 の範囲内か
       if (detail.x >= 0 && detail.x < 80 && 
           detail.y >= 0 && detail.y < 80) {
         
@@ -206,13 +216,13 @@ void handleTouch() {
           current_url = calender_url;
         }
 
-        // 3. 強制更新のためにETagを捨てる
+        // 強制更新のためにETagを捨てる
         lastETag = "";
 
-        // 4. 更新実行
+        // 更新実行
         checkAndUpdateCalendar();
         
-        // 5. カウンターリセット
+        // カウンターリセット
         cnt = 0; 
       }
     }
