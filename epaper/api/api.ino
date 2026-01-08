@@ -13,8 +13,8 @@ const char* ssid = SECRET_SSID;     // secrets.h で定義した変数
 const char* password = SECRET_PASS; // secrets.h で定義した変数
 
 // アクセスする「JSONを返すAPI」のURL（Nginx経由でFastAPIの /api/imageName エンドポイントを指す）
-const char* calender_url = "http://10.200.1.178:8080/api/dashboard";
-const char* week_url = "http://10.200.1.178:8080/api/weekData";
+const char* calender_url = "http://10.200.1.6:8080/api/dashboard?year=2026&month=1";
+const char* week_url = "http://10.200.1.6:8080/api/weekData";
 
 // 最初に表示される画像URL
 const char* current_url = calender_url;
@@ -240,9 +240,6 @@ void handleTouch() {
       // 「週へ/月へ」ボタン
       if (detail.x >= 0 && detail.x < 80 && 
           detail.y >= 0 && detail.y < 80) {
-        
-        Serial.println(">>> Top-Left Button Clicked! Switching...");
-
         // モード反転
         weekMode = !weekMode;
 
@@ -350,16 +347,28 @@ void timeChange() {
 
 // 現在の displayYear, displayMonth を元にURLを生成して更新する
 void updateMonthParams() {
-  // URLを組み立てる (例: http://.../api/dashboard?year=2026&month=2)
-  dynamicUrlBuffer = String(calender_url) + 
+  // 1. calender_url を String型に変換してコピー
+  String baseUrl = String(calender_url);
+
+  // 2. '?' がどこにあるか探す
+  int qMarkIndex = baseUrl.indexOf('?');
+
+  // 3. もし '?' が見つかったら、それより前の部分だけを切り出す
+  //    (例: "http://.../dashboard?year=..."  ->  "http://.../dashboard")
+  if (qMarkIndex != -1) {
+    baseUrl = baseUrl.substring(0, qMarkIndex);
+  }
+
+  // 4. きれいになったベースURLに、新しい年月パラメータを結合する
+  dynamicUrlBuffer = baseUrl + 
                      "?year=" + String(displayYear) + 
                      "&month=" + String(displayMonth);
   
   // 生成したURL文字列のポインタをターゲットURLに設定
-  // (checkAndUpdateCalendar は current_url を見ている前提)
+  // (変数が current_target_url か current_url か、お使いのコードに合わせてください)
   current_url = dynamicUrlBuffer.c_str();
 
-  // Serial.println("Requesting: " + dynamicUrlBuffer);
+  Serial.println("Requesting: " + dynamicUrlBuffer);
 
   // 強制更新を実行
   lastETag = ""; // ETagをリセットして必ずダウンロードさせる
