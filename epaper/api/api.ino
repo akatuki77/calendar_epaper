@@ -35,6 +35,11 @@ struct tm timeinfo; // 時刻情報を格納する構造体
 int cnt = 0; 
 String lastETag = ""; 
 
+// --- カレンダー年月管理用 ---
+int displayYear = 0;  // 現在表示している年
+int displayMonth = 0; // 現在表示している月
+String dynamicUrlBuffer = ""; // 作成したURLを保持しておくバッファ
+
 // サーバーを確認し、更新があれば描画まで行う関数
 void checkAndUpdateCalendar() {
   // WiFiがつながっていなければ何もしない
@@ -127,7 +132,7 @@ void checkAndUpdateCalendar() {
 // ボタン描画関数
 void drawModeButton() {
   // 枠線を描く
-  M5.Display.drawRect(0, 0, 80, 80, TFT_BLACK);
+  M5.Display.drawRect(10, 10, 70, 70, TFT_BLACK);
 
   // フォント設定 (日本語フォント efontJA_24 を使用)
   M5.Display.setFont(&fonts::efontJA_24);
@@ -137,10 +142,31 @@ void drawModeButton() {
   // モードによって文字を変える
   if (weekMode) {
     // 週表示のとき
-    M5.Display.drawString("月へ", 15, 30); // 座標は枠の中央あたりに調整
+    M5.Display.drawString("月へ", 25, 35); // 座標は枠の中央あたりに調整
   } else {
     // 月表示のとき (ダッシュボード)
-    M5.Display.drawString("週へ", 15, 30);
+    M5.Display.drawString("週へ", 25, 35);
+
+    // ◁ (左向きの三角枠)
+    // 頂点3つの座標 (x1, y1), (x2, y2), (x3, y3), 色 を指定します
+    M5.Display.drawTriangle(
+        190, 40,  // 左の頂点 (尖っている部分)
+        230, 20,  // 右上の頂点
+        230, 60,  // 右下の頂点
+        TFT_BLACK
+    );
+
+    // ▷ (右向きの三角枠)
+    M5.Display.drawTriangle(
+        480, 40, // 右の頂点 (尖っている部分)
+        440, 20,  // 左上の頂点
+        440, 60,  // 左下の頂点
+        TFT_BLACK
+    );
+
+    // 今月に戻るボタン
+    M5.Display.drawRect(580, 10, 80, 70, TFT_BLACK);
+    M5.Display.drawString("今月へ", 585, 30);
   }
 }
 
@@ -186,6 +212,17 @@ void setup() {
   // NTPサーバー（インターネット上の時計サーバー）を設定
   configTime(gmtOffset_sec, daylightOffset_sec, "pool.ntp.org", "time.google.com");
 
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo)) {
+    // 現在の年月を初期値にセット
+    displayYear = timeinfo.tm_year + 1900;
+    displayMonth = timeinfo.tm_mon + 1;
+  } else {
+    // 取得失敗時のデフォルト値
+    displayYear = 2025; 
+    displayMonth = 1;
+  }
+
   // これ以降の描画は「部分更新 (epd_fast)」モードで行うよう、モードを切り替える（loop()での display() は「暗転」しなくなる。）
   M5.Display.setEpdMode(epd_mode_t::epd_fast); 
 }
@@ -200,7 +237,7 @@ void handleTouch() {
     if (detail.wasClicked()) {
       Serial.printf("Touched at X:%d, Y:%d\n", detail.x, detail.y);
 
-      // 左上 (0,0) から 幅80, 高さ80 の範囲内か
+      // 「週へ/月へ」ボタン
       if (detail.x >= 0 && detail.x < 80 && 
           detail.y >= 0 && detail.y < 80) {
         
@@ -224,6 +261,45 @@ void handleTouch() {
         
         // カウンターリセット
         cnt = 0; 
+      } else if (!weekMode && 
+                 detail.x >= 570 && detail.x < 650 && 
+                 detail.y >= 0 && detail.y < 80) {
+        // 「今月へ」ボタン
+        // ダッシュボードモードへ変更
+        current_url = calender_url;
+
+        // 強制更新のためにETagを捨てる
+        lastETag = "";
+
+        // 更新実行
+        checkAndUpdateCalendar();
+        
+        // カウンターリセット
+        cnt = 0;
+      } else if (!weekMode && 
+                 detail.x >= 190 && detail.x < 250 && 
+                 detail.y >= 10 && detail.y < 70) {
+        // 「◁」ボタン (前の月へ)
+        displayMonth--;      // 月を減らす
+        if (displayMonth < 1) { 
+          displayMonth = 12; // 1月より前なら12月へ
+          displayYear--;     // 年を減らす
+        }
+        
+        // 更新実行
+        updateMonthParams();
+      } else if (!weekMode && 
+                 detail.x >= 440 && detail.x < 500 && 
+                 detail.y >= 10 && detail.y < 70) {
+        // 「▷」ボタン (次の月へ)
+        displayMonth++;      // 月を増やす
+        if (displayMonth > 12) { 
+          displayMonth = 1;  // 12月より後なら1月へ
+          displayYear++;     // 年を増やす
+        }
+
+        // 更新実行
+        updateMonthParams();
       }
     }
   }
@@ -270,6 +346,25 @@ void timeChange() {
   } else {
       Serial.println("Failed to get time in loop");
     }
+}
+
+// 現在の displayYear, displayMonth を元にURLを生成して更新する
+void updateMonthParams() {
+  // URLを組み立てる (例: http://.../api/dashboard?year=2026&month=2)
+  dynamicUrlBuffer = String(calender_url) + 
+                     "?year=" + String(displayYear) + 
+                     "&month=" + String(displayMonth);
+  
+  // 生成したURL文字列のポインタをターゲットURLに設定
+  // (checkAndUpdateCalendar は current_url を見ている前提)
+  current_url = dynamicUrlBuffer.c_str();
+
+  // Serial.println("Requesting: " + dynamicUrlBuffer);
+
+  // 強制更新を実行
+  lastETag = ""; // ETagをリセットして必ずダウンロードさせる
+  checkAndUpdateCalendar();
+  cnt = 0; // 自動更新タイマーリセット
 }
 
 void loop() {
