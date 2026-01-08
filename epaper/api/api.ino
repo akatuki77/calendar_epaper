@@ -13,8 +13,8 @@ const char* ssid = SECRET_SSID;     // secrets.h で定義した変数
 const char* password = SECRET_PASS; // secrets.h で定義した変数
 
 // アクセスする「JSONを返すAPI」のURL（Nginx経由でFastAPIの /api/imageName エンドポイントを指す）
-const char* calender_url = "http://10.200.1.6:8080/api/dashboard";
-const char* week_url = "http://10.200.1.6:8080/api/weekData";
+const char* calender_url = "http://10.200.1.203:8080/api/dashboard";
+const char* week_url = "http://10.200.1.203:8080/api/weekData";
 
 // 最初に表示される画像URL
 const char* current_url = calender_url;
