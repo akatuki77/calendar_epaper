@@ -13,7 +13,7 @@ const char* ssid = SECRET_SSID;     // secrets.h で定義した変数
 const char* password = SECRET_PASS; // secrets.h で定義した変数
 
 // アクセスする「JSONを返すAPI」のURL（Nginx経由でFastAPIの /api/imageName エンドポイントを指す）
-const char* calender_url = "http://10.200.1.6:8080/api/dashboard?year=2026&month=1";
+const char* calender_url = "http://10.200.1.6:8080/api/dashboard";
 const char* week_url = "http://10.200.1.6:8080/api/weekData";
 
 // 最初に表示される画像URL
@@ -49,8 +49,6 @@ void checkAndUpdateCalendar() {
   Serial.println(current_url); // 現在のURLを表示
 
   HTTPClient http;
-  
-  // ここに対象のURL変数を指定
   http.begin(current_url); 
 
   // --- ETagの照合リクエスト設定 ---
@@ -69,7 +67,7 @@ void checkAndUpdateCalendar() {
 
   // --- 結果による分岐 ---
   if (httpCode == HTTP_CODE_OK) { // 200 OK: 更新あり (または初回)
-    Serial.println("[Update] 200 OK - New content received.");
+    Serial.println("[Update] 200 OK");
 
     // 新しいETagが来ていれば保存する
     if (http.hasHeader("ETag")) {
@@ -80,12 +78,11 @@ void checkAndUpdateCalendar() {
     String contentType = http.header("Content-Type");
 
     if (contentType.indexOf("image") >= 0) {
-      Serial.println("[Update] Drawing image...");
-      
       // 画像データを取得
       String payload = http.getString();
       
       if (payload.length() > 0) {
+        Serial.println("[Update] Drawing...");
         // 画像を描画するために「高画質モード」へ
         M5.Display.setEpdMode(epd_mode_t::epd_quality);
         bool drawn = false;
@@ -102,9 +99,7 @@ void checkAndUpdateCalendar() {
           drawModeButton();
 
           M5.Display.display(); // 画面更新(暗転)
-        } else {
-          Serial.println("[Update] Draw failed.");
-        }
+        } 
 
         // 時計表示のために「高速モード」に戻す
         M5.Display.setEpdMode(epd_mode_t::epd_fast);
@@ -112,21 +107,28 @@ void checkAndUpdateCalendar() {
         // 画像更新で時計が消えたので、すぐに再描画するようフラグをリセット
         lastMinute = -1; 
       }
-    } else {
-        Serial.println("[Update] Received non-image data. Ignoring.");
-    }
-
+    } 
   } else if (httpCode == 304) { // 304 Not Modified: 更新なし
     // サーバーが「データは変わってないよ」と返してきた場合
     Serial.println("[Check] 304 Not Modified.");
-    // 更新がないので、何もしない
-
-  } else {
-    // その他のエラー
-    Serial.printf("[Check] HTTP Failed: %d\n", httpCode);
-  }
-
+  } 
   http.end();
+}
+
+// 年月パラメータ付きURLを生成して更新を実行する関数
+void updateMonthParams() {
+  // ベースURL + 年 + 月 を結合
+  dynamicUrlBuffer = String(calender_url) + 
+                     "?year=" + String(displayYear) + 
+                     "&month=" + String(displayMonth);
+  
+  // 生成したURLを現在のターゲットに設定
+  current_url = dynamicUrlBuffer.c_str();
+
+  // 強制更新を実行
+  lastETag = ""; // ETagをリセットして必ずダウンロードさせる
+  checkAndUpdateCalendar();
+  cnt = 0; // 自動更新タイマーリセット
 }
 
 // ボタン描画関数
@@ -164,9 +166,99 @@ void drawModeButton() {
         TFT_BLACK
     );
 
-    // 今月に戻るボタン
+    // 今月へボタン
     M5.Display.drawRect(580, 10, 80, 70, TFT_BLACK);
     M5.Display.drawString("今月へ", 585, 30);
+  }
+}
+
+// タッチ判定関数
+void handleTouch() {
+  // タッチされているか？
+  if (M5.Touch.getCount() > 0) {
+    auto detail = M5.Touch.getDetail(0);
+    
+    // 指が離れた瞬間に判定
+    if (detail.wasClicked()) {
+      // 「週へ/月へ」ボタン
+      if (detail.x >= 0 && detail.x < 80 && detail.y >= 0 && detail.y < 80) {
+        weekMode = !weekMode; // モード反転
+
+        if (weekMode) {
+          // 週表示へ切り替え
+          current_url = week_url;
+          lastETag = "";
+          checkAndUpdateCalendar();
+          cnt = 0;
+        } else {
+          // 月表示へ切り替え
+          updateMonthParams();         
+        }
+      } else if (!weekMode && detail.x >= 570 && detail.x < 650 && detail.y >= 0 && detail.y < 80) {
+        // 「今月へ」ボタン
+        if (getLocalTime(&timeinfo)) {
+          displayYear = timeinfo.tm_year + 1900;
+          displayMonth = timeinfo.tm_mon + 1;
+          updateMonthParams(); // ★ここも重複コードを削除して関数呼び出しに
+        }
+      } else if (!weekMode && detail.x >= 190 && detail.x < 250 && detail.y >= 10 && detail.y < 70) {
+        // 「◁」ボタン (前の月へ)
+        displayMonth--;      // 月を減らす
+        if (displayMonth < 1) { 
+          displayMonth = 12; // 1月より前なら12月へ
+          displayYear--;     // 年を減らす
+        }
+        
+        updateMonthParams(); // 更新実行
+      } else if (!weekMode && detail.x >= 440 && detail.x < 500 && detail.y >= 10 && detail.y < 70) {
+        // 「▷」ボタン (次の月へ)
+        displayMonth++;      // 月を増やす
+        if (displayMonth > 12) { 
+          displayMonth = 1;  // 12月より後なら1月へ
+          displayYear++;     // 年を増やす
+        }
+
+        updateMonthParams(); // 更新実行
+      }
+    }
+  }
+}
+
+// 時間更新関数
+void timeChange() {
+  // 時刻が取得できた場合のみ処理
+  if (getLocalTime(&timeinfo)) {
+    // 「今の分」と「最後に表示した分」が違うなら更新する（起動直後は -1 と 33（33分）で違うので即実行される → 次は 34（34分） になった瞬間に実行される）
+    if (timeinfo.tm_min != lastMinute) {
+      // 画像更新用変数
+      cnt++;
+
+      if (cnt >= 30) { // 30分ごとに自動更新チェック
+        checkAndUpdateCalendar(); // 画像更新関数を呼び出す
+        cnt = 0; // リセット
+      }
+
+      lastMinute = timeinfo.tm_min; // 最後に表示した分を更新
+      // 時刻用の文字列をフォーマット (秒数なし"%H:%M") (秒数あり"%H:%M") 
+      strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M", &timeinfo);
+
+      // 古い時刻を消す
+      // 時計領域(TIME_W, TIME_H)だけを「白」で塗りつぶす
+      M5.Display.fillRect(TIME_X, TIME_Y, TIME_W, TIME_H, TFT_WHITE);
+      
+      // フォントの「形」を Font2 (セリフ体) に設定
+      M5.Display.setFont(&fonts::Font4);
+
+      // フォントサイズを設定
+      M5.Display.setTextSize(1.5); 
+      
+      // 時刻を描画
+      M5.Display.drawString(timeStringBuff, TIME_X, TIME_Y);
+
+      // 時計領域「だけ」をEPDに反映（ここが「部分更新」のコードで、画像は更新されない）
+      M5.Display.display(TIME_X, TIME_Y, TIME_W, TIME_H);
+    } 
+
   }
 }
 
@@ -188,8 +280,10 @@ void setup() {
   
   // EPD(電子ペーパー)の描画モードを「高速(epd_fast)」に設定
   M5.Display.setEpdMode(epd_mode_t::epd_quality); 
+  M5.Display.clear(TFT_WHITE); // 画面全体を白でクリア
   
   drawModeButton();
+  M5.Display.display(); // 画面更新(暗転)
   
   // WiFiに接続を開始
   WiFi.begin(ssid, password);
@@ -199,20 +293,9 @@ void setup() {
     delay(500); // 0.5秒待つ
   }     
 
-  // 初回更新
-  checkAndUpdateCalendar();
-  
-  // 描画した画像を、ここで「同時に」EPDに反映
-  M5.Display.display(); 
+  // NTP設定
+  configTime(9 * 3600, 0, "pool.ntp.org", "time.google.com");
 
-  // --- NTP（時計）のセットアップ ---
-  const long  gmtOffset_sec = 9 * 3600; // 日本のタイムゾーン (JST: 9時間 * 3600秒) を設定
-  const int   daylightOffset_sec = 0;   // 夏時間はなし
-  
-  // NTPサーバー（インターネット上の時計サーバー）を設定
-  configTime(gmtOffset_sec, daylightOffset_sec, "pool.ntp.org", "time.google.com");
-
-  struct tm timeinfo;
   if (getLocalTime(&timeinfo)) {
     // 現在の年月を初期値にセット
     displayYear = timeinfo.tm_year + 1900;
@@ -223,157 +306,10 @@ void setup() {
     displayMonth = 1;
   }
 
+  updateMonthParams(); // 初回カレンダー表示
+
   // これ以降の描画は「部分更新 (epd_fast)」モードで行うよう、モードを切り替える（loop()での display() は「暗転」しなくなる。）
   M5.Display.setEpdMode(epd_mode_t::epd_fast); 
-}
-
-// タッチ判定関数
-void handleTouch() {
-  // タッチされているか？
-  if (M5.Touch.getCount() > 0) {
-    auto detail = M5.Touch.getDetail(0);
-    
-    // 指が離れた瞬間に判定
-    if (detail.wasClicked()) {
-      Serial.printf("Touched at X:%d, Y:%d\n", detail.x, detail.y);
-
-      // 「週へ/月へ」ボタン
-      if (detail.x >= 0 && detail.x < 80 && 
-          detail.y >= 0 && detail.y < 80) {
-        // モード反転
-        weekMode = !weekMode;
-
-        // URLの切り替え
-        if (weekMode) {
-          current_url = week_url;
-        } else {
-          current_url = calender_url;
-        }
-
-        // 強制更新のためにETagを捨てる
-        lastETag = "";
-
-        // 更新実行
-        checkAndUpdateCalendar();
-        
-        // カウンターリセット
-        cnt = 0; 
-      } else if (!weekMode && 
-                 detail.x >= 570 && detail.x < 650 && 
-                 detail.y >= 0 && detail.y < 80) {
-        // 「今月へ」ボタン
-        // ダッシュボードモードへ変更
-        current_url = calender_url;
-
-        // 強制更新のためにETagを捨てる
-        lastETag = "";
-
-        // 更新実行
-        checkAndUpdateCalendar();
-        
-        // カウンターリセット
-        cnt = 0;
-      } else if (!weekMode && 
-                 detail.x >= 190 && detail.x < 250 && 
-                 detail.y >= 10 && detail.y < 70) {
-        // 「◁」ボタン (前の月へ)
-        displayMonth--;      // 月を減らす
-        if (displayMonth < 1) { 
-          displayMonth = 12; // 1月より前なら12月へ
-          displayYear--;     // 年を減らす
-        }
-        
-        // 更新実行
-        updateMonthParams();
-      } else if (!weekMode && 
-                 detail.x >= 440 && detail.x < 500 && 
-                 detail.y >= 10 && detail.y < 70) {
-        // 「▷」ボタン (次の月へ)
-        displayMonth++;      // 月を増やす
-        if (displayMonth > 12) { 
-          displayMonth = 1;  // 12月より後なら1月へ
-          displayYear++;     // 年を増やす
-        }
-
-        // 更新実行
-        updateMonthParams();
-      }
-    }
-  }
-}
-
-// 時間更新関数
-void timeChange() {
-  // 時刻が取得できた場合のみ処理
-  if (getLocalTime(&timeinfo)) {
-    // 「今の分」と「最後に表示した分」が違うなら更新する（起動直後は -1 と 33（33分）で違うので即実行される → 次は 34（34分） になった瞬間に実行される）
-    if (timeinfo.tm_min != lastMinute) {
-      // 画像更新用変数
-      cnt++;
-
-      if (cnt >= 5) {
-        // 画像更新関数を呼び出す
-        checkAndUpdateCalendar();
-        cnt = 0; // リセット
-      }
-
-      // 最後に表示した分を更新
-      lastMinute = timeinfo.tm_min;
-
-      // 時刻用の文字列をフォーマット (秒数なし"%H:%M") (秒数あり"%H:%M") 
-      strftime(timeStringBuff, sizeof(timeStringBuff), "%H:%M", &timeinfo);
-
-      // 古い時刻を消す
-      // 時計領域(TIME_W, TIME_H)だけを「白」で塗りつぶす
-      M5.Display.fillRect(TIME_X, TIME_Y, TIME_W, TIME_H, TFT_WHITE);
-      
-      // フォントの「形」を Font2 (セリフ体) に設定
-      M5.Display.setFont(&fonts::Font4);
-
-      // フォントサイズを設定
-      M5.Display.setTextSize(1.5); 
-      
-      // 時刻を描画
-      M5.Display.drawString(timeStringBuff, TIME_X, TIME_Y);
-
-      // 時計領域「だけ」をEPDに反映（ここが「部分更新」のコードで、画像は更新されない）
-      M5.Display.display(TIME_X, TIME_Y, TIME_W, TIME_H);
-    } 
-
-  } else {
-      Serial.println("Failed to get time in loop");
-    }
-}
-
-// 現在の displayYear, displayMonth を元にURLを生成して更新する
-void updateMonthParams() {
-  // 1. calender_url を String型に変換してコピー
-  String baseUrl = String(calender_url);
-
-  // 2. '?' がどこにあるか探す
-  int qMarkIndex = baseUrl.indexOf('?');
-
-  // 3. もし '?' が見つかったら、それより前の部分だけを切り出す
-  //    (例: "http://.../dashboard?year=..."  ->  "http://.../dashboard")
-  if (qMarkIndex != -1) {
-    baseUrl = baseUrl.substring(0, qMarkIndex);
-  }
-
-  // 4. きれいになったベースURLに、新しい年月パラメータを結合する
-  dynamicUrlBuffer = baseUrl + 
-                     "?year=" + String(displayYear) + 
-                     "&month=" + String(displayMonth);
-  
-  // 生成したURL文字列のポインタをターゲットURLに設定
-  // (変数が current_target_url か current_url か、お使いのコードに合わせてください)
-  current_url = dynamicUrlBuffer.c_str();
-
-  Serial.println("Requesting: " + dynamicUrlBuffer);
-
-  // 強制更新を実行
-  lastETag = ""; // ETagをリセットして必ずダウンロードさせる
-  checkAndUpdateCalendar();
-  cnt = 0; // 自動更新タイマーリセット
 }
 
 void loop() {
